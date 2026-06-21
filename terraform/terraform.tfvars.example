@@ -1,0 +1,17 @@
+# Keep region default aligned with project decision.
+aws_region       = "eu-west-1"
+project          = "devunleashed"
+env              = "dev"
+
+# Requires Bedrock model access in the selected region/account.
+bedrock_model_id = "mistral.mixtral-8x7b-instruct-v0:1"
+
+# Chrome extension OAuth callback/logout URL.
+web_callback_url = "https://<EXT_ID>.chromiumapp.org/"
+web_logout_url   = "https://<EXT_ID>.chromiumapp.org/"
+
+# Email address to receive billing alerts
+billing_alert_email = "your-email@example.com"
+
+# The threshold for the billing alarm in USD
+billing_threshold = "3"
