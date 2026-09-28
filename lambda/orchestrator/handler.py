@@ -166,7 +166,7 @@ def _create_job(jobs_table_name, user_id, job_id, target_type, target_value, ris
             "riskSensitivity": risk_sensitivity,
             "createdAt": now_iso,
             "updatedAt": now_iso,
-            "expiresAt": _cache_ttl(2592000),
+            "expiresAt": _cache_ttl(7 * 24 * 60 * 60),
         }
     )
 

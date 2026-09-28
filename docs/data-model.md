@@ -1,6 +1,6 @@
 # Data Model
 
-This document describes the DynamoDB tables and expected item shapes used by the backend.
+This document describes the DynamoDB tables provisioned by `terraform/database.tf` and illustrative item shapes used by the hackathon backend. The original working app is no longer available; these examples are not live data.
 
 > Auth note: the API Gateway is protected by a Cognito authorizer. If a request is missing/invalid `Authorization: Bearer <JWT>`, API Gateway returns an auth error (typically `401`/`403`) and the Lambda functions are not invoked.
 
@@ -46,7 +46,7 @@ Example item:
 ```
 
 ## URL Cache Table (`${project}-${env}-url-cache`)
-Primary key: `urlHash` (S) | TTL: `expiresAt`
+Primary key: `urlHash` (S) | TTL: `expiresAt` (one hour from cache write).
 
 Example item:
 ```json
@@ -82,13 +82,13 @@ Example item:
     "recommended_action": "Do not enter personal information or passwords on this website.",
     "generated_at": "2026-05-23T15:42:10Z"
   },
-  "expiresAt": 1784892130,
+  "expiresAt": 1779554530,
   "updatedAt": "2026-05-23T15:42:10Z"
 }
 ```
 
 ## Content Cache Table (`${project}-${env}-content-cache`)
-Primary key: `contentHash` (S) | TTL: `expiresAt`
+Primary key: `contentHash` (S) | TTL: `expiresAt` (one hour from cache write).
 
 Example item:
 ```json
@@ -115,50 +115,37 @@ Example item:
     "recommended_action": "Verify the sender through an official channel before taking action.",
     "generated_at": "2026-05-23T15:44:10Z"
   },
-  "expiresAt": 1784892250,
+  "expiresAt": 1779554650,
   "updatedAt": "2026-05-23T15:44:10Z"
 }
 ```
 
-## Risk Events Table (`${project}-${env}-risk-events`)
-Primary key: `userId` (S) | Sort key: `eventId` (S)
+## Analysis Jobs Table (`${project}-${env}-analysis-jobs`)
+Primary key: `userId` (S) | Sort key: `jobId` (S) | TTL: `expiresAt` (N, epoch seconds).
 
-TTL: `expiresAt` (N, epoch seconds). Items are written with ~30 days retention.
+The Orchestrator creates a `PENDING` job; the Worker (or Image Worker) stores the result and marks it `COMPLETED`, or `FAILED` on error. Jobs have a seven-day TTL from creation (refreshed on image completion). DynamoDB TTL deletion is asynchronous, so physical deletion may occur later. `GET /result/{jobId}` reads one job, and `GET /history` queries jobs by the authenticated user's `userId`. The `jobId` begins with an epoch timestamp, followed by a UUID, to support time-ordered history.
 
-Notes:
-- `userId` comes from the Cognito JWT claim `sub`.
-- `eventId` is time-sortable (format: `${epochSeconds}-${uuid}`) so descending queries return newest first.
-
-Example item:
+Example completed item (fields vary for image and failed jobs):
 ```json
 {
   "userId": "d2a3d6b9-0f42-4d5b-a3b1-7f3f7a9c1f11",
-  "eventId": "1763902930-0e12aaf6-2e6f-4b6a-9d2e-7f94e74e9b2a",
+  "jobId": "1779550930-0e12aaf6-2e6f-4b6a-9d2e-7f94e74e9b2a",
+  "status": "COMPLETED",
   "targetType": "url",
   "targetValue": "https://example-login-secure.com",
   "riskSensitivity": "high",
+  "cacheHit": false,
   "result": {
     "score": 87,
     "decision": "block",
     "category": "phishing",
-    "confidence": "high",
-    "triggers": ["brand_impersonation", "credential_collection"],
     "summary": "This link appears to mimic a legitimate login page to harvest credentials.",
     "simple_explanation": "This looks unsafe because it may steal your login details.",
-    "safe_next_step": "Open the official app instead.",
-    "policy_reason": "Blocked because the risk score is high and phishing indicators were detected.",
-    "ai_reasoning_steps": [
-      "Detected a suspicious domain.",
-      "Detected credential collection intent.",
-      "Classified as likely phishing."
-    ],
-    "details": {
-      "domain_age_days": 3
-    },
-    "recommended_action": "Do not enter personal information or passwords on this website.",
-    "generated_at": "2026-05-23T15:42:10Z"
+    "safe_next_step": "Open the official app instead."
   },
   "createdAt": "2026-05-23T15:42:10Z",
-  "expiresAt": 1766494930
+  "updatedAt": "2026-05-23T15:42:11Z",
+  "completedAt": "2026-05-23T15:42:11Z",
+  "expiresAt": 1780155730
 }
 ```

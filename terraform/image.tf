@@ -23,6 +23,24 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "image_uploads" {
   }
 }
 
+# Uploaded images are temporary input; S3 lifecycle expiration is asynchronous.
+resource "aws_s3_bucket_lifecycle_configuration" "image_uploads" {
+  bucket = aws_s3_bucket.image_uploads.id
+
+  rule {
+    id     = "expire-uploads"
+    status = "Enabled"
+
+    filter {
+      prefix = "uploads/"
+    }
+
+    expiration {
+      days = 1
+    }
+  }
+}
+
 # Trigger ImageWorker on upload
 resource "aws_lambda_permission" "s3_invoke_image_worker" {
   statement_id  = "AllowS3InvokeImageWorker"

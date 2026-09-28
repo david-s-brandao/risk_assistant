@@ -86,7 +86,7 @@ resource "aws_lambda_function" "worker" {
       JOBS_TABLE          = aws_dynamodb_table.analysis_jobs.name
       VALIDATOR_FUNCTION  = aws_lambda_function.validator.function_name
       # Bump to invalidate DynamoDB cache entries when validator logic/models change.
-      CACHE_VERSION       = "v5"
+      CACHE_VERSION = "v6"
     }
   }
 }

@@ -98,8 +98,8 @@ def _process_message(msg):
     cache_version = os.environ.get("CACHE_VERSION", "v1")
 
     try:
-        # 7 days cache
-        cache_seconds = 7 * 24 * 60 * 60
+        # Risk assessments can become stale quickly; reuse them for at most one hour.
+        cache_seconds = 60 * 60
 
         if target_type == "url":
             cache_table = url_cache_table
@@ -114,7 +114,12 @@ def _process_message(msg):
         cache_key = {key_name: cache_hash}
 
         cached = _fetch_cache(cache_table, cache_key)
-        cache_hit = bool(cached and isinstance(cached.get("result"), dict))
+        # DynamoDB TTL deletion is asynchronous, so never serve an expired item.
+        cache_hit = bool(
+            cached
+            and isinstance(cached.get("result"), dict)
+            and int(cached.get("expiresAt") or 0) > int(time.time())
+        )
 
         if cache_hit:
             result = cached["result"]

@@ -1,16 +1,31 @@
-# Risk Assistant — AI-Powered Threat Analysis Platform
+# Risk Assistant - AI-Powered Threat Analysis Platform
 
-Internet security is no longer the same it was before AI. Scamming has become dramatically easier, cyberattacks increase severely every year, and 80% of scammed people never recover their money.
+**Risk Assistant** is a project built by a team during a **48-hour hackathon** focused on the frontend. We delivered a working app and chose to build a cloud backend and architecture as well to make the project more distinctive, even though the backend was **not part of the evaluation**. The app is **no longer available**; this repository preserves the AWS backend and infrastructure as code, not a live product or the app's source code.
 
-**Risk Assistant** is a serverless AWS cloud infrastructure built during a local hackathon to address this. It analyzes content — URLs, messages, and images — and returns an AI-generated risk score from 0 to 100, a decision (`allow` / `review` / `block`), and a plain-language explanation the user can act on.
+The backend analyzes URLs, email addresses, messages, and images for potential threats. It produces an AI-generated risk score (0 to 100), a decision (`allow` / `review` / `block`), and an explanation with a suggested next step.
+
+### My contribution
+
+I was the **sole contributor to the cloud architecture**. My work focused primarily on designing and implementing the AWS infrastructure and serverless backend documented here: Terraform provisioning, authenticated API, asynchronous processing, data storage, image-analysis pipeline, and Bedrock integration. The functional app was a **team deliverable**, not something I built alone.
+
+### Architecture review: what I would change
+
+This is a **hackathon prototype, not a production-ready security service**. The serverless design let us deliver an authenticated, asynchronous end-to-end flow in 48 hours without operating servers. With more time, I would prioritize:
+
+1. **Fail safely:** Bedrock failures or malformed responses can currently produce an `allow` verdict. I would distinguish unavailable analysis from low risk, validate model output, and cache only valid verdicts.
+2. **Make jobs recoverable:** SQS has a dead-letter queue, but batch retries can repeat work and jobs can remain pending. I would make processing idempotent, report partial batch failures, and monitor/reconcile stuck jobs.
+3. **Harden security and data handling:** Cognito protects the API and the current backend uses DynamoDB rather than SQL queries, but analyzed content is untrusted input to the AI model. I would test prompt injection, tighten IAM, enforce request and upload limits, and define deletion and incident-response policies. Short TTLs reduce retention; they do not prevent a data breach.
+4. **Prove quality and operability:** Add automated tests, classification evaluations, metrics and alerts before relying on risk scores for real users.
+
+These are **proposed changes, not protections already implemented**. The [full architecture analysis](docs/architecture-analysis.md) explains the current controls, specific gaps, retention choices, and priorities.
 
 ---
 
 ## How It Works
 
-A user submits content through a mobile app, browser extension, or web client. The backend queues the request, runs it through Amazon Bedrock (Mistral Mixtral 8x7B), and returns a structured risk report. Results are cached to avoid redundant AI calls. Images are handled via a separate pipeline using Textract and Rekognition to extract text before scoring.
+In the hackathon, users submitted content through the app. The backend accepts text, URLs, and email addresses through an authenticated API, creates an analysis job, and queues it in SQS. A Lambda worker checks the DynamoDB cache, calls a validator backed by Amazon Bedrock (Mistral Mixtral 8x7B) on a cache miss, and saves the result for polling. Images follow a separate S3-triggered pipeline using Textract for text extraction, with Rekognition as a fallback if Textract is unavailable due to subscription restrictions.
 
-The core output from every analysis:
+Illustrative analysis result:
 
 ```json
 {
@@ -20,7 +35,7 @@ The core output from every analysis:
   "confidence": "high",
   "triggers": ["brand_impersonation", "credential_collection", "suspicious_domain"],
   "summary": "This link mimics a legitimate login page to harvest credentials.",
-  "simple_explanation": "This looks unsafe — it may steal your login details.",
+  "simple_explanation": "This looks unsafe, it may steal your login details.",
   "safe_next_step": "Open the official app instead.",
   "recommended_action": "Do not enter personal information on this website.",
   "generated_at": "2026-05-23T15:42:10Z"
@@ -31,7 +46,7 @@ The core output from every analysis:
 
 ## Architecture
 
-Fully serverless, event-driven, deployed on AWS with Terraform.
+Serverless, event-driven AWS architecture defined with Terraform. The diagram illustrates the hackathon solution; deployment instructions below describe how to provision the infrastructure in your own account, not a currently hosted service.
 
 <p align="center">
   <img src="img/architecture_diagram.png" width="90%" alt="Architecture Diagram">
@@ -41,10 +56,10 @@ Fully serverless, event-driven, deployed on AWS with Terraform.
 
 | Function | Runtime | Role |
 |---|---|---|
-| **Orchestrator** | Python 3.12 | API entry point. Validates requests, checks cache, creates jobs, enqueues to SQS or calls Validator directly |
+| **Orchestrator** | Python 3.12 | API entry point. Handles authenticated requests, creates jobs, enqueues text analyses in SQS, and generates image upload URLs |
 | **Worker** | Python 3.12 | SQS consumer (batch size 10). Checks cache, calls Validator, writes results |
 | **Validator** | Python 3.12 | AI layer. Invokes Bedrock Agent; falls back to direct model call on failure |
-| **Image Worker** | Python 3.12 | S3 event consumer. Uses Textract + Rekognition to extract text from images, then calls Validator |
+| **Image Worker** | Python 3.12 | S3 event consumer. Extracts image text with Textract (Rekognition fallback), then calls Validator |
 
 ### API Endpoints
 
@@ -52,7 +67,7 @@ All endpoints require a valid Cognito JWT in the `Authorization` header.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/analyze` | Submit a URL, message, or other text content |
+| `POST` | `/analyze` | Submit a URL, email address, or message |
 | `GET` | `/result/{jobId}` | Poll for an async job result |
 | `GET` | `/history` | Fetch past analyses for the authenticated user |
 | `POST` | `/image/upload-url` | Get a presigned S3 URL to upload an image for analysis |
@@ -66,11 +81,11 @@ All endpoints require a valid Cognito JWT in the `Authorization` header.
 | `parental-control` | `userId` | Per-user risk sensitivity settings (`low` / `medium` / `high`) |
 | `url-cache` | `urlHash` + TTL | Cached results for URL inputs |
 | `content-cache` | `contentHash` + TTL | Cached results for message/text inputs |
-| `analysis-jobs` | `userId` + `jobId` + TTL | Async job state and results |
+| `analysis-jobs` | `userId` + `jobId` + TTL | Async job state, results, and per-user history |
 
 ### Caching
 
-Every result is stored against a hash of the input content. Before calling Bedrock, both the Orchestrator and Worker check the cache. Cache entries expire via DynamoDB TTL. When the model or prompts change, bump the `CACHE_VERSION` environment variable on the Worker to invalidate all existing entries without touching the database.
+For text-based analyses, the Worker hashes the cache version, input type, value, and risk sensitivity. On a valid cache hit it reuses the result; otherwise it calls the Validator and caches the response for **one hour**. The Worker checks the expiry timestamp on read because DynamoDB TTL removal is asynchronous. Bumping the Worker's `CACHE_VERSION` changes the cache key and bypasses previous entries without deleting them. Image analyses use a separate pipeline and do not use this cache. Analysis jobs have a **seven-day TTL**; uploaded images are configured to expire after **one day** via S3 lifecycle (physical deletion may happen later).
 
 ### AI Agent
 
@@ -107,13 +122,18 @@ risk_assistant/
 │   ├── worker/          # SQS consumer
 │   ├── validator/       # Bedrock AI layer
 │   └── image_worker/    # S3 image pipeline
+├── img/
+│   └── architecture_diagram.png
 └── docs/
-    └── data-model.md    # DynamoDB table schemas and example items
+    ├── data-model.md           # DynamoDB table schemas and example items
+    └── architecture-analysis.md  # Architecture review and next steps
 ```
 
 ---
 
 ## Deployment
+
+The original hackathon app is no longer available. These steps are for provisioning the backend yourself; they do not restore the original app or provide a public demo.
 
 ### Prerequisites
 
@@ -141,7 +161,7 @@ billing_alert_email = "you@example.com"
 billing_threshold   = "3"
 ```
 
-> **Bedrock model access:** Go to AWS Console → Bedrock → Model access and enable the model for your account and region before deploying.
+> **Bedrock model access:** Go to AWS Console -> Bedrock -> Model access and enable the model for your account and region before deploying.
 
 ### 2. Deploy
 
@@ -180,16 +200,18 @@ TOKEN=$(aws cognito-idp initiate-auth \
   --query 'AuthenticationResult.IdToken' \
   --output text)
 
-curl -X POST https://<api_gateway_url>/dev/analyze \
+API_URL=$(terraform output -raw api_gateway_url)
+
+curl -X POST "$API_URL/analyze" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"content": "https://suspicious-login-page.com", "type": "url"}'
+  -d '{"url": "https://suspicious-login-page.com"}'
 ```
 
-The response includes a `jobId`. Poll for the result:
+Run this from the `terraform/` directory. The Terraform output includes the stage path. The response includes a `jobId`; poll for the result:
 
 ```bash
-curl https://<api_gateway_url>/dev/result/<jobId> \
+curl "$API_URL/result/<jobId>" \
   -H "Authorization: Bearer $TOKEN"
 ```
 

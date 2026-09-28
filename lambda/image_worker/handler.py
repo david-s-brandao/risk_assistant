@@ -187,8 +187,8 @@ def _handle_record(record):
             validatorFallback=validator_fallback,
             validatorError=validator_error,
             completedAt=_now_iso(),
-            # Keep image-related jobs for 30 days (same as others), but we refresh TTL on completion.
-            expiresAt=_cache_ttl(2592000),
+            # Retain image job metadata for seven days after completion.
+            expiresAt=_cache_ttl(7 * 24 * 60 * 60),
         )
     except Exception as e:
         print(f"Image worker error jobId={job_id}: {e}")
